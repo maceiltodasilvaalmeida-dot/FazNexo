@@ -3,10 +3,9 @@ name: Compilar APKs FazNexo 4.0
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
-    paths:
-      - 'ANDROID/**'
-      - '.github/workflows/compilar-apks.yml'
+    branches:
+      - main
+      - master
 
 permissions:
   contents: read
@@ -15,13 +14,27 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: ANDROID/FazNexo-Apps
-
     steps:
       - name: Baixar projeto
         uses: actions/checkout@v4
+
+      - name: Localizar projeto Android
+        shell: bash
+        run: |
+          SETTINGS_FILE="$(find . -type f -name 'settings.gradle' -print -quit)"
+
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "::error::O arquivo settings.gradle não foi encontrado."
+            echo "::error::Envie a pasta ANDROID completa para o repositório."
+            find . -maxdepth 4 -type f | sort
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          PROJECT_DIR="${PROJECT_DIR#./}"
+
+          echo "ANDROID_PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Projeto Android localizado em: $PROJECT_DIR"
 
       - name: Configurar Java 17
         uses: actions/setup-java@v4
@@ -33,7 +46,10 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Instalar SDK 36
-        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Configurar Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -41,15 +57,38 @@ jobs:
           gradle-version: '8.11.1'
 
       - name: Compilar Cliente e Profissional
-        run: gradle :cliente:assembleDebug :profissional:assembleDebug --stacktrace
+        shell: bash
+        run: |
+          gradle \
+            -p "$ANDROID_PROJECT_DIR" \
+            :cliente:assembleDebug \
+            :profissional:assembleDebug \
+            --stacktrace
 
       - name: Organizar APKs
+        shell: bash
         run: |
-          mkdir -p ../../APKS-PRONTOS
-          cp cliente/build/outputs/apk/debug/faznexo-cliente.apk ../../APKS-PRONTOS/faznexo-cliente.apk
-          cp profissional/build/outputs/apk/debug/faznexo-profissional.apk ../../APKS-PRONTOS/faznexo-profissional.apk
+          mkdir -p APKS-PRONTOS
 
-      - name: Publicar artefatos
+          CLIENTE_APK="$(find "$ANDROID_PROJECT_DIR/cliente/build/outputs/apk/debug" -type f -name '*.apk' -print -quit)"
+          PROFISSIONAL_APK="$(find "$ANDROID_PROJECT_DIR/profissional/build/outputs/apk/debug" -type f -name '*.apk' -print -quit)"
+
+          if [ -z "$CLIENTE_APK" ]; then
+            echo "::error::O APK do Cliente não foi encontrado."
+            exit 1
+          fi
+
+          if [ -z "$PROFISSIONAL_APK" ]; then
+            echo "::error::O APK do Profissional não foi encontrado."
+            exit 1
+          fi
+
+          cp "$CLIENTE_APK" APKS-PRONTOS/faznexo-cliente.apk
+          cp "$PROFISSIONAL_APK" APKS-PRONTOS/faznexo-profissional.apk
+
+          ls -lh APKS-PRONTOS
+
+      - name: Publicar APKs
         uses: actions/upload-artifact@v4
         with:
           name: FazNexo-4.0-APKs
